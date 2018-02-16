@@ -2,6 +2,8 @@ import socket
 import struct
 import sys
 import getpass
+import threading
+import time
 
 class msg_preauth:
     #Def from net/message.h:99
@@ -90,6 +92,7 @@ class mysocket:
         if sock is None:
             self.sock = socket.socket(
                 socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.setblocking(0)
         else:
             self.sock = sock
 
@@ -117,22 +120,35 @@ class mysocket:
         #bytes_recd = bytes_recd + len(chunk)
         return chunk
 
-def pslogin(user, password):
+sendlist = []
+
+def network_loop():
     s = mysocket()
     s.connect("planeshift.teamix.org", 7777)
+
+    while True:
+        #Send next stuff
+        if(len(sendlist)):
+            pkg = sendlist.pop()
+            s.mysend(pkg[0], pkg[1])
+        
+        try:
+            recv = s.myreceive()
+            print(recv)
+        except:
+            #Nuthin
+            pass
+        
+        time.sleep(0.05)
+
+def pslogin(user, password):
+    t = threading.Thread(target=network_loop)
+    t.start()
 
     message = msg_preauth()
     message.append(0xB9) #PS id
     pkg = makepacket(message)
-
-    s.mysend(pkg[0], pkg[1])
-    print("PREAUTHENTICATE sent")
-
-    recv = s.myreceive()
-    print(recv)
-
-    recv = s.myreceive()
-    print(recv)
+    sendlist.insert(0, pkg)
 
 #Start dialog
 print("Welcome to Planeshift text client! Login here")
