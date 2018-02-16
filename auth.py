@@ -4,6 +4,7 @@ import sys
 import getpass
 import threading
 import time
+import dispatcher
 
 class msg_preauth:
     #Def from net/message.h:99
@@ -25,6 +26,7 @@ class msg_preautapprove:
     msgdef = "<BHI"
     msglen = 4
     msgpayload = ()
+    dispatch_signal = dispatch.Signal(providing_args=["message"])
 
     def append(self, content):
         self.msgpayload = (self.msgtype, self.msglen, content)
@@ -69,6 +71,10 @@ class msg_auth:
         
         curappendpos += 1
 
+messagedict = {
+    4: msg_preautapprove
+}
+
 def makepacket(msg):
     message = struct.pack(msg.msgdef, *msg.msgpayload)
 
@@ -87,64 +93,66 @@ def makepacket(msg):
 
     return (packet, reallen)
 
-class mysocket:
-    def __init__(self, sock=None):
-        if sock is None:
-            self.sock = socket.socket(
-                socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setblocking(0)
-        else:
-            self.sock = sock
-
-    def connect(self, host, port):
-        self.sock.connect((host, port))
-
-    def mysend(self, msg, msglen):
-        totalsent = 0
-        while totalsent < msglen:
-            sent = self.sock.send(msg[totalsent:])
-            if sent == 0:
-                raise RuntimeError("socket connection broken")
-            totalsent = totalsent + sent
-
-    def myreceive(self):
-        chunks = []
-        bytes_recd = 0
-        msglen = 1400
-        #while bytes_recd < msglen:
-        chunk = self.sock.recv(min(msglen - bytes_recd, 2048))
-        if chunk == '':
-            raise RuntimeError("socket connection broken2")
-            
-        #chunks.append(chunk)
-        #bytes_recd = bytes_recd + len(chunk)
-        return chunk
-
 sendlist = []
 
 def network_loop():
-    s = mysocket()
-    s.connect("planeshift.teamix.org", 7777)
+    s = socket.socket(
+                socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("planeshift.teamix.org", 7777))
 
     while True:
-        #Send next stuff
+        #Send next package
+        #TODO check if socket is busy
+        #TODO make the sendlist atomic or something
+        #to prevent fiddling with by other threads 
         if(len(sendlist)):
             pkg = sendlist.pop()
-            s.mysend(pkg[0], pkg[1])
+            s.send(pkg[0])
         
+        #See if we got response
+        #TODO check if socket is done sending
         try:
-            recv = s.myreceive()
-            print(recv)
+            recv = s.recv(2048)
+            #What did we get?
+            if(len(recv) > 15):
+                #Parse the packet
+                pktdef = "<IIIHBBH"
+                
+                headers = struct.unpack(pktdef, recv[:18])
+                
+                messageobj = messagedict[headers[6]]()
+                
+                completedef = pktdef + messageobj.msgdef[3:]
+
+                wholemessage = struct.unpack(completedef, recv)
+            else:
+                print("ACK")
+                #It is an ACK
+                pass
         except:
             #Nuthin
             pass
         
         time.sleep(0.05)
 
+def on_preautapprove(message):
+    print("hullo")
+    #Then we need to put the stuff in an auth message
+    #it should be username, password with the response we got
+    #from preauthapproved
+
+#On login
 def pslogin(user, password):
+    #Start networking
+    #Wait until we got a preauthapproved message
+    #there need to be a better way to construct events
+    #that can be called without waiting
+    
+
     t = threading.Thread(target=network_loop)
     t.start()
 
+    #Send preauth event
     message = msg_preauth()
     message.append(0xB9) #PS id
     pkg = makepacket(message)
