@@ -1,5 +1,5 @@
 import socket
-import struct
+ import struct
 import sys
 import getpass
 import threading
@@ -125,6 +125,8 @@ def network_loop():
                 completedef = pktdef + messageobj.msgdef[3:]
 
                 wholemessage = struct.unpack(completedef, recv)
+                
+                messagedict[headers[6]].dispatch_signal.send(sender=self, message=wholemessage)
             else:
                 print("ACK")
                 #It is an ACK
@@ -135,7 +137,7 @@ def network_loop():
         
         time.sleep(0.05)
 
-def on_preautapprove(message):
+def on_preautapprove(sender, **kwargs):
     print("hullo")
     #Then we need to put the stuff in an auth message
     #it should be username, password with the response we got
@@ -147,7 +149,7 @@ def pslogin(user, password):
     #Wait until we got a preauthapproved message
     #there need to be a better way to construct events
     #that can be called without waiting
-    
+    msg_preautapprove.dispatch_signal.connect(on_preautapprove)
 
     t = threading.Thread(target=network_loop)
     t.start()
