@@ -5,6 +5,7 @@ import getpass
 import threading
 import time
 import queue
+import hashlib
 
 class msg_preauth:
     #Def from net/message.h:99
@@ -32,47 +33,59 @@ class msg_preautapprove:
     
 class msg_auth:
     msgtype = 2
-    splitmsgdef = (
+    splitmsgdef = [
         "I",
-        "c",
-        "c",
-        "c",
-        "c",
-        "c",
-        "c",
+        "s",
+        "s",
+        "s",
+        "s",
+        "s",
         "H",
         "H",
-        "c",
-        "c")
+        "s",
+        "s",
+        "s"]
     msgdef = "<BH"
     msglen = 8
     msgheaderlen = 3
-    msgpayload = (msgtype, msglen)
+    msgpayload = [msgtype,
+        msglen,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None]
     curappendpos = 0
 
     def append(self, content):
-        msgpayload[curappendpos] = content
+        self.msgpayload[self.curappendpos + 2] = content
         
-        adddef = splitmsgdef[curappendpos]
+        adddef = self.splitmsgdef[self.curappendpos]
 
         #We need to figure out how long the text is
-        isdynstring = adddef == "c"
+        isdynstring = adddef == "s"
         
         if(isdynstring):
-            adddef = len(content) + adddef
-            #Strings are null terminated (same as adding one empty byte after each string?)
-            msgpayload[curappendpos] += "\0"
+            self.msgdef += str(len(content))
             
-        msgdef += adddef
+        self.msgdef += adddef
         
         if(isdynstring):
-            msglen = struct.calcsize(msgdef) - msgheaderlen
+            self.msglen = struct.calcsize(self.msgdef) - self.msgheaderlen
         
-        curappendpos += 1
+        self.curappendpos += 1
 
 messagedict = {
     4: msg_preautapprove
 }
+
+msgcounter = 1
 
 def makepacket(msg):
     message = struct.pack(msg.msgdef, *msg.msgpayload)
@@ -86,11 +99,13 @@ def makepacket(msg):
     #2 byte length for whole package
     #1 byte flags
     #And then append message
-    packet = struct.pack(pktdef, 1, 0, pktlen, pktlen, 0x01)
+    global msgcounter
+    packet = struct.pack(pktdef, msgcounter, 0, pktlen, pktlen, 0x01)
     packet += message;
     reallen = struct.calcsize(pktdef) + pktlen
+    msgcounter += 1
 
-    return (packet, reallen)
+    return packet
 
 sendlist = queue.Queue()
 recvlist = queue.Queue()
@@ -107,13 +122,17 @@ def network_loop():
         #to prevent fiddling with by other threads 
         if not sendlist.empty():
             pkg = sendlist.get()
-            s.send(pkg[0])
+
+            s.send(pkg)
             sendlist.task_done()
         
         #See if we got response
         #TODO check if socket is done sending
         try:
             recv = s.recv(2048)
+
+            print(recv)
+
             #What did we get?
             if(len(recv) > 15):
                 #Parse the packet
@@ -138,11 +157,48 @@ def network_loop():
         
         time.sleep(0.05)
 
-def on_preautapprove(message):
-    print("hullo")
+def on_preautapprove(message, user, password):
     #Then we need to put the stuff in an auth message
     #it should be username, password with the response we got
     #from preauthapproved
+    authmsg = msg_auth()
+    authmsg.append(0xB9)
+    authmsg.append(bytes(user + "\0", 'utf-8'))
+
+    #Password to sha256
+    encodedpw = hashlib.sha256()
+    encodedpw.update(password.encode('utf-8'))
+    pwhex = encodedpw.hexdigest()
+    #Append the stuff we got from the message
+    compoundpw = str(message[3]) + ":" + pwhex
+    #Guess what, encode it again
+    finalencode = hashlib.sha256()
+    finalencode.update(compoundpw.encode('utf-8'))
+
+    authmsg.append(bytes(str(finalencode.hexdigest()) + "\0", 'utf-8'))
+
+    #Next thing is our OS
+    authmsg.append(bytes("U\0", 'utf-8'))
+    #Graphics card
+    authmsg.append(bytes("RoxorFore\0", 'utf-8'))
+    #GFX card version
+    authmsg.append(bytes("3L173\0", 'utf-8'))
+    #OS major
+    authmsg.append(13)
+    #OS minor
+    authmsg.append(37)
+    #Empty PW string
+    authmsg.append(bytes("\0", 'utf-8'))
+    #OS platform
+    authmsg.append(bytes("Python OS\0", 'utf-8'))
+    #Machine
+    authmsg.append(bytes("x86_64\0", 'utf-8'))
+
+    print(authmsg.msgdef)
+
+    pkg = makepacket(authmsg)
+    print(pkg)
+    sendlist.put(pkg)
 
 #On login
 def pslogin(user, password):
@@ -161,7 +217,7 @@ def pslogin(user, password):
 
     while True:
         if not recvlist.empty():
-            on_preautapprove(recvlist.get())
+            on_preautapprove(recvlist.get(), user, password)
             recvlist.task_done()
 
 #Start dialog
