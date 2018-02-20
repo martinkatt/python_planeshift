@@ -1,10 +1,10 @@
 import socket
- import struct
+import struct
 import sys
 import getpass
 import threading
 import time
-import dispatcher
+import queue
 
 class msg_preauth:
     #Def from net/message.h:99
@@ -26,7 +26,6 @@ class msg_preautapprove:
     msgdef = "<BHI"
     msglen = 4
     msgpayload = ()
-    dispatch_signal = dispatch.Signal(providing_args=["message"])
 
     def append(self, content):
         self.msgpayload = (self.msgtype, self.msglen, content)
@@ -93,7 +92,8 @@ def makepacket(msg):
 
     return (packet, reallen)
 
-sendlist = []
+sendlist = queue.Queue()
+recvlist = queue.Queue()
 
 def network_loop():
     s = socket.socket(
@@ -105,9 +105,10 @@ def network_loop():
         #TODO check if socket is busy
         #TODO make the sendlist atomic or something
         #to prevent fiddling with by other threads 
-        if(len(sendlist)):
-            pkg = sendlist.pop()
+        if not sendlist.empty():
+            pkg = sendlist.get()
             s.send(pkg[0])
+            sendlist.task_done()
         
         #See if we got response
         #TODO check if socket is done sending
@@ -126,7 +127,7 @@ def network_loop():
 
                 wholemessage = struct.unpack(completedef, recv)
                 
-                messagedict[headers[6]].dispatch_signal.send(sender=self, message=wholemessage)
+                recvlist.put(wholemessage)
             else:
                 print("ACK")
                 #It is an ACK
@@ -137,7 +138,7 @@ def network_loop():
         
         time.sleep(0.05)
 
-def on_preautapprove(sender, **kwargs):
+def on_preautapprove(message):
     print("hullo")
     #Then we need to put the stuff in an auth message
     #it should be username, password with the response we got
@@ -149,8 +150,6 @@ def pslogin(user, password):
     #Wait until we got a preauthapproved message
     #there need to be a better way to construct events
     #that can be called without waiting
-    msg_preautapprove.dispatch_signal.connect(on_preautapprove)
-
     t = threading.Thread(target=network_loop)
     t.start()
 
@@ -158,7 +157,12 @@ def pslogin(user, password):
     message = msg_preauth()
     message.append(0xB9) #PS id
     pkg = makepacket(message)
-    sendlist.insert(0, pkg)
+    sendlist.put(pkg)
+
+    while True:
+        if not recvlist.empty():
+            on_preautapprove(recvlist.get())
+            recvlist.task_done()
 
 #Start dialog
 print("Welcome to Planeshift text client! Login here")
